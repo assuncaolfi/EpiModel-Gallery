@@ -1,10 +1,10 @@
-
 ##
-## SEIR Model: Adding an Exposed State to an SIR
+## SEIQHRF Model: Adding Quarantined, Hospitalized and Recovered States
+## to an SEIR
 ## EpiModel Gallery (https://github.com/statnet/EpiModel-Gallery)
 ##
-## Authors: Samuel M. Jenness, Venkata R. Duvvuri
-## Date: August 2018
+## Authors: Luis Assuncao
+## Date: April 2021
 ##
 
 ## Load EpiModel
@@ -23,7 +23,6 @@ if (interactive()) {
   ncores <- 2
   nsteps <- 200
 }
-
 
 # Network model estimation ------------------------------------------------
 
@@ -54,46 +53,64 @@ plot(dx, plots.joined = FALSE, qnts.alpha = 0.8)
 
 # Model parameters
 # Possible infections in the SEIQHRF model
-infections <- data.frame(
+inf.pars <- data.frame(
   from = c('e', 'i', 'q'),
   to = c('s', 's', 's'),
   act.rate = c(10, 10, 2.5),
   inf.prob = c(0.02, 0.05, 0.02) 
 )
-infections$final.prob <- 1 - (1 - infections$inf.prob)^infections$act.rate
+inf.pars$final.prob <- 1 - (1 - inf.pars$inf.prob)^inf.pars$act.rate
 # Possible progressions in the SEIQHRF model
-progressions <- data.frame(
+prog.pars <- data.frame(
   from = c('e', 'e', 'i', 'i', 'i', 'q', 'q', 'h', 'h'),
   to =   c('i', 'r', 'q', 'h', 'r', 'h', 'r', 'r', 'f'),
-  random = c(T, T, T, T, T, T, T, T, T), 
-  rate = c(1/10, 1/20, 1/30, 1/30, 1/20, 1/30, 1/20, 1/15, 1/50),
-  scale = c(5, NA, NA, NA, 35, NA, 35, NA, NA),
-  shape = c(1.5, NA, NA, NA, 1.5, NA, 1.5, NA, NA)
+  rate = c(1/10, 1/20, 1/30, 1/30, 1/20, 1/30, 1/20, 1/15, 1/50)
 )
+# Summary parameters
+states <- c(inf.pars$from, inf.pars$to, prog.pars$from, prog.pars$to)
+unique.states <- unique(states)
+sum.pars <- with(
+  prog.pars,
+  list(
+    num.names = paste(unique.states, "num", sep = "."),
+    flow.names = paste0(from, to, ".flow"),
+    prog.rates = tapply(rate, from, function(x) 1 - prod(1 - x)),
+    next.states = tapply(to, from, list),
+    next.probs = tapply(rate, from, list),
+    infective.status = unique(inf.pars$from),
+    infected.status = unique(from)
+  )   
+)
+
 # Param list
-param <- param.net(progressions = progressions, infections = infections)
+param <- param.net(
+  prog.pars = prog.pars,
+  inf.pars = inf.pars,
+  sum.pars = sum.pars
+)
 
 # Initial conditions
 init <- init.net(i.num = 10)
 
 # Read in the module functions
-# if (interactive()) {
-#   source("2018-08-AddingAnExposedState/module-fx.R", echo = TRUE)
-# } else {
+if (interactive()) {
+#   source("2020-08-SEIQHRF/module-fx.R", echo = TRUE)
   source("module-fx.R")
-# }
-
+} else {
+  source("module-fx.R")
+}
 # Control settings
 control <- control.net(type = NULL,
                        nsteps = nsteps,
                        nsims = nsims,
-                       ncores = ncores,
+                       ncores = 1,
                        infection.FUN = infect,
                        progress.FUN = progress)
 
 # Run the network model simulation with netsim
 sim <- netsim(est, param, init, control)
 print(sim)
+# names(sim$epi)
 
 # Plot outcomes
 par(mar = c(3,3,1,1), mgp = c(2,1,0))

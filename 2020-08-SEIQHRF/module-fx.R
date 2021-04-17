@@ -6,12 +6,13 @@
 ## Date: August 2018
 ##
 
+
 # Replacement discord_edgelist function -----------------------------------
 
 # Add infective_status parameters to the original discord_edgelist function
-# So more than one status can be infective 
+# In our case, some status are infective
 
-discord_edgelist <- function (dat, at, inf_status, network = 1) {
+discord_edgelist <- function (dat, at, infectiveStatus, network = 1) {
     status <- get_attr(dat, "status")
     active <- get_attr(dat, "active")
     tergmLite <- get_control(dat, "tergmLite")
@@ -25,7 +26,7 @@ discord_edgelist <- function (dat, at, inf_status, network = 1) {
     if (nrow(el) > 0) {
         el <- el[sample(1:nrow(el)), , drop = FALSE]
         stat <- matrix(status[el], ncol = 2)
-        isInf <- matrix(stat %in% inf_status, ncol = 2)
+        isInf <- matrix(stat %in% infectiveStatus, ncol = 2)
         isSus <- matrix(stat %in% "s", ncol = 2)
         SIpairs <- el[isSus[, 1] * isInf[, 2] == 1, , drop = FALSE]
         ISpairs <- el[isSus[, 2] * isInf[, 1] == 1, , drop = FALSE]
@@ -33,8 +34,8 @@ discord_edgelist <- function (dat, at, inf_status, network = 1) {
         if (nrow(pairs) > 0) {
             sus <- pairs[, 1]
             inf <- pairs[, 2]
-            inf_status <- status[inf]
-            del <- data.frame(at, sus, inf, inf_status)
+            from <- status[inf]
+            del <- data.frame(at, sus, inf, from)
             keep <- rowSums(matrix(c(active[del$sus], active[del$inf]),
                 ncol = 2)) == 2
             del <- del[keep, ]
@@ -46,63 +47,76 @@ discord_edgelist <- function (dat, at, inf_status, network = 1) {
     return(del)
 }
 
-
 # Replacement infection/transmission module -------------------------------
 
 infect <- function(dat, at) {
 
-  # Uncomment this to function environment interactively
+  ## Uncomment this to function environment interactively
   # browser()
 
-  # Attributes
+  ## Attributes ##
   active <- get_attr(dat, "active")
   status <- get_attr(dat, "status")
 
-  # Parameters 
-  infections <- get_param(dat, "infections")
-  n_infections <- nrow(infections)
-  infective_status <- infections$from 
-  infective_ids <- which(active == 1 & status %in% infective_status)
-
-  # Retroactively save infection time as 1 for ids initialized in
-  # infective status.
   if (at == 2) {
-      infTime <- rep(NA, length(active))
-      infTime[infective_ids] <- 1
-      dat <- set_attr(dat, "inf_time", infTime)
+    infTime <- rep(NA, length(active))
+    infTime[which(status == "i")] <- 1
+    dat <- set_attr(dat, "infTime", infTime)
   } else {
-      infTime <- get_attr(dat, "inf_time")
+    infTime <- get_attr(dat, "infTime")
   }
 
-  del <- discord_edgelist(dat, at, infective_status)
+  ## Parameters ##
+  inf.pars <- get_param(dat, "inf.pars")
+  prog.pars <- get_param(dat, "prog.pars")
+  sum.pars <- get_param(dat, "sum.pars")
 
-  for (i in 1:n_infections) {
+  ## Find infected nodes ##
+  infectedStatus <- sum.pars$infected.status
+  idsInf <- which(active == 1 & status %in% infectedStatus)
+  nActive <- sum(active == 1)
+  nElig <- length(idsInf)
 
-      del_i <- del[del$status == infective_status[i], ]
+  ## Initialize default incidence at 0 ##
+  nInf <- 0
+
+  ## If any infected nodes, proceed with transmission ##
+  if (nElig > 0 && nElig < nActive) {
+
+    ## Look up discordant edgelist ##
+    infectiveStatus <- sum.pars$infective.status
+    del <- discord_edgelist(dat, at, infectiveStatus)
+
+    ## If any discordant pairs, proceed ##
+    if (!is.null(del)) {
+
+      # Set parameters on discordant edgelist data frame
+      del <- merge(del, inf.pars, by = "from")
 
       # Stochastic transmission process
-      transmit <- rbinom(nrow(del_i), 1, infections$final.prob[i])
+      transmit <- rbinom(nrow(del), 1, del$final.prob)
 
       # Keep rows where transmission occurred
-      del_i <- del_i[which(transmit == 1), ]
+      del <- del[which(transmit == 1), ]
 
       # Look up new ids if any transmissions occurred
-      idsNewInf <- unique(del_i$sus)
+      idsNewInf <- unique(del$sus)
+      nInf <- length(idsNewInf)
 
       # Set new attributes for those newly infected
-      status[idsNewInf] <- "e"
-      infTime[idsNewInf] <- at
-      dat <- set_attr(dat, "status", status)
-      dat <- set_attr(dat, "infTime", infTime)
-
-      ## Save summary statistic for S->E flow
-      # TODO decide about this
-      # dat <- set_epi(dat, "se.flow", at, nInf)
-
+      if (nInf > 0) {
+        status[idsNewInf] <- "e"
+        infTime[idsNewInf] <- at
+        dat <- set_attr(dat, "status", status)
+        dat <- set_attr(dat, "infTime", infTime)
+      }
+    }
   }
 
-  return(dat)
+  ## Save summary statistic for S->E flow
+  dat <- set_epi(dat, "se.flow", at, nInf)
 
+  return(dat)
 }
 
 # New disease progression module ------------------------------------------
@@ -110,49 +124,62 @@ infect <- function(dat, at) {
 
 progress <- function(dat, at) {
 
-  # Uncomment this to function environment interactively
+  ## Uncomment this to function environment interactively
   # browser()
 
-  # Attributes
+  ## Attributes ##
   active <- get_attr(dat, "active")
   status <- get_attr(dat, "status")
+  previousStatus <- status
 
-  # Progressions
-  progressions <- get_param(dat, "progressions")
-  n_progressions <- length(progressions)
-  from <- progressions$from
-  to <- progressions$to
-  rate <- progressions$rate
+  ## Parameters ##
+  progPars <- get_param(dat, "prog.pars")
+  sum.pars <- get_param(dat, "sum.pars")
 
-  for (p in 1:n_progressions) {
+  ## X to Y progression process ##
+#   status <- sample(c(prog.pars$from, "s"), 20, replace = TRUE)
+  progRates <- sum.pars$prog.rates
+  probProg <- progRates[status]
+  probProg[is.na(probProg)] <- 0
+  isProg <- active & rbinom(length(status), 1, probProg)
+  noProg <- all(isProg == FALSE)
 
-    from_p <- from[p]
-    to_p <- to[p]
-    rate_p <- rate[p]
-
-    # Sample progression ids
-    n_eligible <- sum(active == 1 & status == from_p)
-    ids <- which(rbinom(n_eligible, 1, rate_p) == 1)
-
-    # Save flow statistic
-    dat <- set_epi(dat, paste0(from_p, to_p, ".flow"), at, length(ids))
-
-    # Update status
-    status[ids] <- to_p
-  
+  if (noProg) {
+    status <- status
+  } else {
+    nextStates <- sum.pars$next.states
+    nextProbs <- sum.pars$next.probs
+    statusProg <- status[isProg == 1]
+    status[isProg == 1] <- mapply(
+      sample,
+      x = nextStates[statusProg],
+      size = 1,
+      prob = nextProbs[statusProg]
+    )
   }
 
-  # Save updated status
+  ## Write out updated status attribute ##
   dat <- set_attr(dat, "status", status)
 
-  # Save num statistic
-  for (s in unique(c(from, to))) {
+  ## Save flows ##
+  uniqueFlowNames <- sum.pars$flow.names
+  vecFlows <- paste0(previousStatus, status, ".flow")[isProg]
+  progFlows <- table(vecFlows)
+  progFlowNames <- names(progFlows)
+  for (flowName in uniqueFlowNames) {
+    value <- if (flowName %in% progFlowNames) progFlows[flowName] else 0
+    dat <- set_epi(dat, flowName, at, value)
+  } 
 
-    dat <- set_epi(dat, paste0(s, ".num"), at, sum(active == 1 & status == s))
-  
+  ## Save nums ##
+  uniqueNumNames <- sum.pars$num.names
+  progNums <- table(status[active == 1])
+  progNumNames <- paste0(names(progNums), ".num")
+  for (numName in uniqueNumNames) {
+    value <- if (numName %in% progNumNames) progNums[numName] else 0
+    dat <- set_epi(dat, numName, at, value)
   }
 
   return(dat)
-
 }
 
