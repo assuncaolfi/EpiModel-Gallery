@@ -76,7 +76,7 @@ sum.pars <- with(
     flow.names = paste0(from, to, ".flow"),
     prog.rates = tapply(rate, from, function(x) 1 - prod(1 - x)),
     next.states = tapply(to, from, list),
-    next.probs = tapply(rate, from, list),
+    next.probs = tapply(rate, from, function(x) list(x / sum(x))),
     infective.status = unique(inf.pars$from),
     infected.status = unique(from)
   )   
@@ -103,7 +103,7 @@ if (interactive()) {
 control <- control.net(type = NULL,
                        nsteps = nsteps,
                        nsims = nsims,
-                       ncores = 1,
+                       ncores = ncores,
                        infection.FUN = infect,
                        progress.FUN = progress)
 
